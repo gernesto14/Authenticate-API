@@ -3,6 +3,8 @@ import express from "express";
 import bcrypt from "bcrypt";
 import fs from "fs";
 import users from "./users.js";
+import isEmail from "validator/lib/isEmail.js";
+import isStrongPassword from "validator/lib/isStrongPassword.js";
 
 const app = express();
 const PORT = process.env.PORT;
@@ -15,6 +17,42 @@ app.use((req, res, next) => {
       req.path
     }, Time: ${new Date()}, IP: ${req.ip}`
   );
+  next();
+});
+
+// Middleware function to validate the email and password for the users/login users/signup POST routes only
+app.use((req, res, next) => {
+  const { username, password } = req.query;
+  if (req.path === "/users/login" || req.path === "/users/signup") {
+    if (!username || !password) {
+      console.log("Username and password are required");
+      res.status(400).json({ error: "Username and password are required" });
+    } else if (!isEmail(username)) {
+      console.log("Invalid email address");
+      res.status(400).json({ error: "Invalid email address" });
+    } else if (
+      !isStrongPassword(password, {
+        minLength: 4,
+        minLowercase: 0,
+        minUppercase: 0,
+        minNumbers: 0,
+        minSymbols: 0,
+        // returnScore: false,
+        // pointsPerUnique: 1,
+        // pointsPerRepeat: 0.5,
+        // pointsForContainingLower: 10,
+        // pointsForContainingUpper: 10,
+        // pointsForContainingNumber: 10,
+        // pointsForContainingSymbol: 10,
+      })
+    ) {
+      console.log("Password is not strong enough: ", password);
+      return res.status(400).json({
+        error:
+          "Password must be at least 8 characters long, and contain at least one uppercase letter, one lowercase letter, one number, and one special character",
+      });
+    }
+  }
   next();
 });
 
@@ -35,7 +73,7 @@ app.get("/users", (req, res) => {
 });
 
 // Create a new user
-app.post("/users", async (req, res) => {
+app.post("/users/signup", async (req, res) => {
   const { username, password } = req.query;
 
   // find if the user already exists
@@ -82,10 +120,12 @@ app.post("/users/login", async (req, res) => {
 
   if (!req.query.username || !req.query.password) {
     console.log("Username and password are required");
-    res.status(400).json({ error: "Username and password are required" });
+    return res
+      .status(400)
+      .json({ error: "Username and password are required" });
   } else if (users.length === 0) {
     console.log("No users found");
-    res.status(404).json({ error: "No users found" });
+    return res.status(404).json({ error: "No users found" });
   }
 
   // Find the user in the database
@@ -93,22 +133,23 @@ app.post("/users/login", async (req, res) => {
 
   if (!user) {
     console.log("User not found");
-    res.status(404).json({ error: "User not found" });
+    return res.status(404).json({ error: "User not found" });
   }
+
   try {
     // Compare the password with the hashed password
     const match = await bcrypt.compare(password, user.password);
 
     if (match) {
       console.log("Login successful");
-      res.status(200).json({ message: "Login successful" });
+      return res.status(200).json({ message: "Login successful" });
     } else {
       console.log("Invalid password");
-      res.status(401).json({ error: "Not authorized!" });
+      return res.status(401).json({ error: "Not authorized!" });
     }
   } catch (error) {
     console.log("Error: ", error.message);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 });
 
