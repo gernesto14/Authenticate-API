@@ -5,10 +5,14 @@ import fs from "fs";
 import users from "./users.js";
 import isEmail from "validator/lib/isEmail.js";
 import isStrongPassword from "validator/lib/isStrongPassword.js";
+import jwt from "jsonwebtoken";
 
 const app = express();
 const PORT = process.env.PORT;
 const saltRounds = parseInt(process.env.SALT_ROUNDS);
+
+const jwtSecret = process.env.JWT_SECRET;
+const jwtExpireIn = process.env.JWT_EXPIRES_IN;
 
 // Middleware function to log the request method and path, and the time it was made, also the source IP address
 app.use((req, res, next) => {
@@ -20,41 +24,74 @@ app.use((req, res, next) => {
   next();
 });
 
-// Middleware function to validate the email and password for the users/login users/signup POST routes only
-app.use((req, res, next) => {
+// Middleware function to validate the email and password for the users/login users/signup  routes only handles POST requests
+function validateEmailPassword(req, res, next) {
   const { username, password } = req.query;
-  if (req.path === "/users/login" || req.path === "/users/signup") {
-    if (!username || !password) {
-      console.log("Username and password are required");
-      res.status(400).json({ error: "Username and password are required" });
-    } else if (!isEmail(username)) {
-      console.log("Invalid email address");
-      res.status(400).json({ error: "Invalid email address" });
-    } else if (
-      !isStrongPassword(password, {
-        minLength: 4,
-        minLowercase: 0,
-        minUppercase: 0,
-        minNumbers: 0,
-        minSymbols: 0,
-        // returnScore: false,
-        // pointsPerUnique: 1,
-        // pointsPerRepeat: 0.5,
-        // pointsForContainingLower: 10,
-        // pointsForContainingUpper: 10,
-        // pointsForContainingNumber: 10,
-        // pointsForContainingSymbol: 10,
-      })
-    ) {
-      console.log("Password is not strong enough: ", password);
-      return res.status(400).json({
-        error:
-          "Password must be at least 8 characters long, and contain at least one uppercase letter, one lowercase letter, one number, and one special character",
-      });
-    }
+
+  if (!username || !password) {
+    console.log("Username and password are required");
+    return res
+      .status(400)
+      .json({ error: "Username and password are required" });
+  } else if (!isEmail(username)) {
+    console.log("Invalid email address");
+    return res.status(400).json({ error: "Invalid email address" });
+  } else if (
+    !isStrongPassword(password, {
+      minLength: 4,
+      minLowercase: 0,
+      minUppercase: 0,
+      minNumbers: 0,
+      minSymbols: 0,
+    })
+  ) {
+    console.log("Password is not strong enough: ", password);
+    return res.status(400).json({
+      error: "Password must be at least 4 characters long.",
+    });
   }
+
   next();
-});
+}
+
+// Middleware function to verify the JWT token
+function verifyAuthToken(req, res, next) {
+  // Check if the token is present
+  const token = req.headers.authorization;
+
+  if (!token) {
+    console.log("No JWT provided");
+    return res
+      .status(403)
+      .send({ message: "Authentication failed! Please try again :(" });
+  }
+
+  // console.log("Auth Token: ", req.headers.authorization.split(" ")[1]);
+  const authToken = token.split(" ")[1];
+
+  // verify the token
+  jwt.verify(authToken, jwtSecret, function (err, decoded) {
+    if (err) {
+      console.log("JWT token: ", token);
+      console.log("Invalid JWT token");
+      return res
+        .status(401)
+        .send({ message: "Authentication failed! Please try again :(" });
+    }
+
+    // create a nice log for the token expiration to be displayed in the console like this: Token expires in: hh:mm:ss
+    const expiryTime = new Date(decoded.exp * 1000);
+    const currentTime = new Date();
+    const timeLeft = expiryTime - currentTime;
+    const hours = Math.floor((timeLeft / (1000 * 60 * 60)) % 24);
+    const minutes = Math.floor((timeLeft / 1000 / 60) % 60);
+    const seconds = Math.floor((timeLeft / 1000) % 60);
+    console.log( `Token expires in: ${hours}:${minutes}:${seconds}`);
+
+
+    next();
+  });
+}
 
 // allow app to use json
 app.use(express.json());
@@ -64,23 +101,22 @@ app.get("/", (req, res) => {
 });
 
 // Get all users
-app.get("/users", (req, res) => {
-  console.log(users);
+app.get("/users", verifyAuthToken, (req, res) => {
+  // console.log(users);
   const { username, password } = users;
-  console.log(typeof username);
 
   res.json(users);
 });
 
 // Create a new user
-app.post("/users/signup", async (req, res) => {
+app.post("/users/signup", validateEmailPassword, async (req, res) => {
   const { username, password } = req.query;
 
   // find if the user already exists
   const userExists = users.find((user) => user.username === username);
   if (userExists) {
     console.log("User already exists");
-    res.status(400).json({ error: "User already exists" });
+    return res.status(400).json({ error: "User already exists" });
   }
 
   try {
@@ -110,7 +146,7 @@ app.post("/users/signup", async (req, res) => {
     res.status(200).json({ message: "User added successfully" });
   } catch (error) {
     console.log("Error: ", error.message);
-    res.status(500).json({ error: error.message });
+    return res.status(500).json({ error: error.message });
   }
 });
 
@@ -141,8 +177,17 @@ app.post("/users/login", async (req, res) => {
     const match = await bcrypt.compare(password, user.password);
 
     if (match) {
+      // Create a JWT token
+      const token = jwt.sign({ id: user._id }, jwtSecret, {
+        expiresIn: jwtExpireIn, // expires in 24 hours
+      });
+
       console.log("Login successful");
-      return res.status(200).json({ message: "Login successful" });
+      console.log("Token: ", token);
+      // return the information including token as JSON
+      return res
+        .status(200)
+        .send({ message: "Successfully logged-in!", token });
     } else {
       console.log("Invalid password");
       return res.status(401).json({ error: "Not authorized!" });
